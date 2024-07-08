@@ -15,24 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
-package org.apache.doris.flink.source.split;
+package org.apache.doris.flink.sink;
 
-import org.apache.doris.flink.rest.PartitionDefinition;
-import org.junit.Assert;
-import org.junit.Test;
+import org.apache.flink.api.common.time.Deadline;
+import org.apache.flink.util.function.SupplierWithException;
 
-import java.util.HashSet;
+import java.util.concurrent.TimeoutException;
 
-public class DorisSourceSplitTest {
+public class TestUtil {
 
-    @Test
-    public void testSplit() {
-        PartitionDefinition pd1 =
-                new PartitionDefinition("db", "tbl", "be", new HashSet<>(), "queryplan1");
-        PartitionDefinition pd2 =
-                new PartitionDefinition("db", "tbl", "be", new HashSet<>(), "queryplan1");
-        DorisSourceSplit split1 = new DorisSourceSplit("be_1", pd1);
-        DorisSourceSplit split2 = new DorisSourceSplit("be_2", pd2);
-        Assert.assertEquals(split1, split2);
+    public static void waitUntilCondition(
+            SupplierWithException<Boolean, Exception> condition,
+            Deadline timeout,
+            long retryIntervalMillis,
+            String errorMsg)
+            throws Exception {
+        while (timeout.hasTimeLeft() && !(Boolean) condition.get()) {
+            long timeLeft = Math.max(0L, timeout.timeLeft().toMillis());
+            Thread.sleep(Math.min(retryIntervalMillis, timeLeft));
+        }
+
+        if (!timeout.hasTimeLeft()) {
+            throw new TimeoutException(errorMsg);
+        }
     }
 }
