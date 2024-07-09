@@ -8,3 +8,9 @@ flink-doris-connector/release.properties
 *.iml
 *.DS_Store
 dist
+
+# Ignore Gradle project-specific cache directory
+.gradle
+
+# Ignore Gradle build output directory
+build
