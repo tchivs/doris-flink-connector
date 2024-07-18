@@ -45,6 +45,11 @@ public class DorisConfigOptions {
 
     public static final String IDENTIFIER = "doris";
     // common option
+    public static final ConfigOption<String> DATABASE =
+            ConfigOptions.key("database")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("doris database.");
     public static final ConfigOption<String> FENODES =
             ConfigOptions.key("fenodes")
                     .stringType()
