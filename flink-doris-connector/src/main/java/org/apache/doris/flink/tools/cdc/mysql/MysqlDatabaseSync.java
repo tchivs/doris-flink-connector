@@ -36,6 +36,7 @@ import org.apache.flink.util.StringUtils;
 
 import org.apache.doris.flink.catalog.doris.DataModel;
 import org.apache.doris.flink.tools.cdc.DatabaseSync;
+import org.apache.doris.flink.tools.cdc.DatabaseSyncConfig;
 import org.apache.doris.flink.tools.cdc.SourceSchema;
 import org.apache.doris.flink.tools.cdc.deserialize.DorisJsonDebeziumDeserializationSchema;
 import org.slf4j.Logger;
@@ -54,10 +55,11 @@ import java.util.Properties;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import static org.apache.flink.cdc.debezium.utils.JdbcUrlUtils.PROPERTIES_PREFIX;
+
 public class MysqlDatabaseSync extends DatabaseSync {
     private static final Logger LOG = LoggerFactory.getLogger(MysqlDatabaseSync.class);
     private static final String JDBC_URL = "jdbc:mysql://%s:%d?useInformationSchema=true";
-    private static final String PROPERTIES_PREFIX = "jdbc.properties.";
 
     public MysqlDatabaseSync() throws SQLException {
         super();
@@ -82,12 +84,10 @@ public class MysqlDatabaseSync extends DatabaseSync {
     @Override
     public Connection getConnection() throws SQLException {
         Properties jdbcProperties = getJdbcProperties();
-        StringBuilder jdbcUrlSb = new StringBuilder(JDBC_URL);
-        jdbcProperties.forEach(
-                (key, value) -> jdbcUrlSb.append("&").append(key).append("=").append(value));
+        String jdbcUrlTemplate = getJdbcUrlTemplate(JDBC_URL, jdbcProperties);
         String jdbcUrl =
                 String.format(
-                        jdbcUrlSb.toString(),
+                        jdbcUrlTemplate,
                         config.get(MySqlSourceOptions.HOSTNAME),
                         config.get(MySqlSourceOptions.PORT));
 
@@ -112,8 +112,8 @@ public class MysqlDatabaseSync extends DatabaseSync {
                                 metaData.getTables(
                                         tableCatalog, null, "%", new String[] {"TABLE"})) {
                             while (tables.next()) {
-                                String tableName = tables.getString("TABLE_NAME");
-                                String tableComment = tables.getString("REMARKS");
+                                String tableName = tables.getString(DatabaseSyncConfig.TABLE_NAME);
+                                String tableComment = tables.getString(DatabaseSyncConfig.REMARKS);
                                 if (!isSyncNeeded(tableName)) {
                                     continue;
                                 }
@@ -171,13 +171,16 @@ public class MysqlDatabaseSync extends DatabaseSync {
 
         setChunkColumns(sourceBuilder);
         String startupMode = config.get(MySqlSourceOptions.SCAN_STARTUP_MODE);
-        if ("initial".equalsIgnoreCase(startupMode)) {
+        if (DatabaseSyncConfig.SCAN_STARTUP_MODE_VALUE_INITIAL.equalsIgnoreCase(startupMode)) {
             sourceBuilder.startupOptions(StartupOptions.initial());
-        } else if ("earliest-offset".equalsIgnoreCase(startupMode)) {
+        } else if (DatabaseSyncConfig.SCAN_STARTUP_MODE_VALUE_EARLIEST_OFFSET.equalsIgnoreCase(
+                startupMode)) {
             sourceBuilder.startupOptions(StartupOptions.earliest());
-        } else if ("latest-offset".equalsIgnoreCase(startupMode)) {
+        } else if (DatabaseSyncConfig.SCAN_STARTUP_MODE_VALUE_LATEST_OFFSET.equalsIgnoreCase(
+                startupMode)) {
             sourceBuilder.startupOptions(StartupOptions.latest());
-        } else if ("specific-offset".equalsIgnoreCase(startupMode)) {
+        } else if (DatabaseSyncConfig.SCAN_STARTUP_MODE_VALUE_SPECIFIC_OFFSET.equalsIgnoreCase(
+                startupMode)) {
             BinlogOffsetBuilder offsetBuilder = BinlogOffset.builder();
             String file = config.get(MySqlSourceOptions.SCAN_STARTUP_SPECIFIC_OFFSET_FILE);
             Long pos = config.get(MySqlSourceOptions.SCAN_STARTUP_SPECIFIC_OFFSET_POS);
@@ -191,7 +194,8 @@ public class MysqlDatabaseSync extends DatabaseSync {
             config.getOptional(MySqlSourceOptions.SCAN_STARTUP_SPECIFIC_OFFSET_SKIP_ROWS)
                     .ifPresent(offsetBuilder::setSkipRows);
             sourceBuilder.startupOptions(StartupOptions.specificOffset(offsetBuilder.build()));
-        } else if ("timestamp".equalsIgnoreCase(startupMode)) {
+        } else if (DatabaseSyncConfig.SCAN_STARTUP_MODE_VALUE_TIMESTAMP.equalsIgnoreCase(
+                startupMode)) {
             sourceBuilder.startupOptions(
                     StartupOptions.timestamp(
                             config.get(MySqlSourceOptions.SCAN_STARTUP_TIMESTAMP_MILLIS)));
@@ -263,17 +267,5 @@ public class MysqlDatabaseSync extends DatabaseSync {
             }
         }
         return chunkMap;
-    }
-
-    private Properties getJdbcProperties() {
-        Properties jdbcProps = new Properties();
-        for (Map.Entry<String, String> entry : config.toMap().entrySet()) {
-            String key = entry.getKey();
-            String value = entry.getValue();
-            if (key.startsWith(PROPERTIES_PREFIX)) {
-                jdbcProps.put(key.substring(PROPERTIES_PREFIX.length()), value);
-            }
-        }
-        return jdbcProps;
     }
 }

@@ -17,80 +17,52 @@
 
 package org.apache.doris.flink.sink.batch;
 
-import org.apache.flink.annotation.VisibleForTesting;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.nio.ByteBuffer;
+import java.util.LinkedList;
 
 /** buffer to queue. */
 public class BatchRecordBuffer {
     private static final Logger LOG = LoggerFactory.getLogger(BatchRecordBuffer.class);
     public static final String LINE_SEPARATOR = "\n";
     private String labelName;
-    private ByteBuffer buffer;
+    private LinkedList<byte[]> buffer;
     private byte[] lineDelimiter;
     private int numOfRecords = 0;
-    private int bufferSizeBytes = 0;
+    private long bufferSizeBytes = 0;
     private boolean loadBatchFirstRecord = true;
     private String database;
     private String table;
+    private final long createTime = System.currentTimeMillis();
+    private long retainTime = 0;
 
-    public BatchRecordBuffer() {}
-
-    public BatchRecordBuffer(byte[] lineDelimiter, int bufferSize) {
-        super();
-        this.lineDelimiter = lineDelimiter;
-        this.buffer = ByteBuffer.allocate(bufferSize);
+    public BatchRecordBuffer() {
+        this.buffer = new LinkedList<>();
     }
 
-    public BatchRecordBuffer(String database, String table, byte[] lineDelimiter, int bufferSize) {
+    public BatchRecordBuffer(String database, String table, byte[] lineDelimiter, long retainTime) {
         super();
         this.database = database;
         this.table = table;
         this.lineDelimiter = lineDelimiter;
-        this.buffer = ByteBuffer.allocate(bufferSize);
+        this.buffer = new LinkedList<>();
+        this.retainTime = retainTime;
     }
 
-    public void insert(byte[] record) {
-        ensureCapacity(record.length);
+    public int insert(byte[] record) {
+        int recordSize = record.length;
         if (loadBatchFirstRecord) {
             loadBatchFirstRecord = false;
         } else if (lineDelimiter != null) {
-            this.buffer.put(this.lineDelimiter);
+            this.buffer.add(this.lineDelimiter);
+            setBufferSizeBytes(this.bufferSizeBytes + this.lineDelimiter.length);
+            recordSize += this.lineDelimiter.length;
         }
-        this.buffer.put(record);
-        setNumOfRecords(getNumOfRecords() + 1);
-        setBufferSizeBytes(getBufferSizeBytes() + record.length);
-    }
-
-    @VisibleForTesting
-    public void ensureCapacity(int length) {
-        int lineDelimiterSize = this.lineDelimiter == null ? 0 : this.lineDelimiter.length;
-        if (buffer.remaining() - lineDelimiterSize >= length) {
-            return;
-        }
-        int currentRemain = buffer.remaining();
-        int currentCapacity = buffer.capacity();
-        // add lineDelimiter length
-        int needed = length - buffer.remaining() + lineDelimiterSize;
-        // grow at least 1MB
-        long grow = Math.max(needed, 1024 * 1024);
-        // grow at least 50% of the current size
-        grow = Math.max(buffer.capacity() / 2, grow);
-        int newCapacity = (int) Math.min(Integer.MAX_VALUE, buffer.capacity() + grow);
-        ByteBuffer tmp = ByteBuffer.allocate(newCapacity);
-        buffer.flip();
-        tmp.put(buffer);
-        buffer.clear();
-        buffer = tmp;
-        LOG.info(
-                "record length {},buffer remain {} ,grow capacity {} to {}",
-                length,
-                currentRemain,
-                currentCapacity,
-                newCapacity);
+        this.buffer.add(record);
+        setNumOfRecords(this.numOfRecords + 1);
+        setBufferSizeBytes(this.bufferSizeBytes + record.length);
+        return recordSize;
     }
 
     public String getLabelName() {
@@ -106,13 +78,6 @@ public class BatchRecordBuffer {
         return numOfRecords == 0;
     }
 
-    public ByteBuffer getData() {
-        // change mode
-        buffer.flip();
-        LOG.debug("flush buffer: {} records, {} bytes", getNumOfRecords(), getBufferSizeBytes());
-        return buffer;
-    }
-
     public void clear() {
         this.buffer.clear();
         this.numOfRecords = 0;
@@ -121,7 +86,7 @@ public class BatchRecordBuffer {
         this.loadBatchFirstRecord = true;
     }
 
-    public ByteBuffer getBuffer() {
+    public LinkedList<byte[]> getBuffer() {
         return buffer;
     }
 
@@ -131,7 +96,7 @@ public class BatchRecordBuffer {
     }
 
     /** @return Buffer size in bytes */
-    public int getBufferSizeBytes() {
+    public long getBufferSizeBytes() {
         return bufferSizeBytes;
     }
 
@@ -141,7 +106,7 @@ public class BatchRecordBuffer {
     }
 
     /** @param bufferSizeBytes Updates sum of size of records present in this buffer (Bytes) */
-    public void setBufferSizeBytes(int bufferSizeBytes) {
+    public void setBufferSizeBytes(long bufferSizeBytes) {
         this.bufferSizeBytes = bufferSizeBytes;
     }
 
@@ -159,5 +124,23 @@ public class BatchRecordBuffer {
 
     public void setTable(String table) {
         this.table = table;
+    }
+
+    public String getTableIdentifier() {
+        if (database != null && table != null) {
+            return database + "." + table;
+        }
+        return null;
+    }
+
+    public byte[] getLineDelimiter() {
+        return lineDelimiter;
+    }
+
+    public boolean shouldFlush() {
+        // When the buffer create time is later than the first interval trigger,
+        // the write will not be triggered in the next interval,
+        // so multiply it by 1.5 to trigger it as early as possible.
+        return (System.currentTimeMillis() - createTime) * 1.5 > retainTime;
     }
 }

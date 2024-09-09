@@ -28,13 +28,16 @@ import org.apache.flink.util.OutputTag;
 import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.StringUtils;
 
+import org.apache.doris.flink.catalog.doris.DorisSchemaFactory;
 import org.apache.doris.flink.catalog.doris.DorisSystem;
 import org.apache.doris.flink.catalog.doris.TableSchema;
 import org.apache.doris.flink.cfg.DorisConnectionOptions;
 import org.apache.doris.flink.cfg.DorisExecutionOptions;
 import org.apache.doris.flink.cfg.DorisOptions;
 import org.apache.doris.flink.cfg.DorisReadOptions;
+import org.apache.doris.flink.exception.DorisSystemException;
 import org.apache.doris.flink.sink.DorisSink;
+import org.apache.doris.flink.sink.schema.SchemaChangeMode;
 import org.apache.doris.flink.sink.writer.WriteMode;
 import org.apache.doris.flink.sink.writer.serializer.DorisRecordSerializer;
 import org.apache.doris.flink.sink.writer.serializer.JsonDebeziumSchemaSerializer;
@@ -45,6 +48,7 @@ import org.slf4j.LoggerFactory;
 import java.io.Serializable;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.sql.SQLSyntaxErrorException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -55,9 +59,10 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.regex.Pattern;
 
+import static org.apache.flink.cdc.debezium.utils.JdbcUrlUtils.PROPERTIES_PREFIX;
+
 public abstract class DatabaseSync {
     private static final Logger LOG = LoggerFactory.getLogger(DatabaseSync.class);
-    private static final String LIGHT_SCHEMA_CHANGE = "light_schema_change";
     private static final String TABLE_NAME_OPTIONS = "table-name";
 
     protected Configuration config;
@@ -68,13 +73,15 @@ public abstract class DatabaseSync {
     protected Pattern includingPattern;
     protected Pattern excludingPattern;
     protected Map<Pattern, String> multiToOneRulesPattern;
-    protected Map<String, String> tableConfig = new HashMap<>();
+    protected DorisTableConfig dorisTableConfig;
     protected Configuration sinkConfig;
     protected boolean ignoreDefaultValue;
+    protected boolean ignoreIncompatible;
 
     public StreamExecutionEnvironment env;
     private boolean createTableOnly = false;
     private boolean newSchemaChange = true;
+    private String schemaChangeMode;
     protected String includingTables;
     protected String excludingTables;
     protected String multiToOneOrigin;
@@ -104,10 +111,6 @@ public abstract class DatabaseSync {
         this.excludingPattern = excludingTables == null ? null : Pattern.compile(excludingTables);
         this.multiToOneRulesPattern = multiToOneRulesParser(multiToOneOrigin, multiToOneTarget);
         this.converter = new TableNameConverter(tablePrefix, tableSuffix, multiToOneRulesPattern);
-        // default enable light schema change
-        if (!this.tableConfig.containsKey(LIGHT_SCHEMA_CHANGE)) {
-            this.tableConfig.put(LIGHT_SCHEMA_CHANGE, "true");
-        }
     }
 
     public void build() throws Exception {
@@ -115,7 +118,9 @@ public abstract class DatabaseSync {
         DorisSystem dorisSystem = new DorisSystem(options);
 
         List<SourceSchema> schemaList = getSchemaList();
-        Preconditions.checkState(!schemaList.isEmpty(), "No tables to be synchronized.");
+        Preconditions.checkState(
+                !schemaList.isEmpty(),
+                "No tables to be synchronized. Please make sure whether the tables that need to be synchronized exist in the corresponding database or schema.");
 
         if (!StringUtils.isNullOrWhitespaceOnly(database)
                 && !dorisSystem.databaseExists(database)) {
@@ -124,11 +129,7 @@ public abstract class DatabaseSync {
         }
         List<String> syncTables = new ArrayList<>();
         List<Tuple2<String, String>> dorisTables = new ArrayList<>();
-        Map<String, Integer> tableBucketsMap = null;
-        if (tableConfig.containsKey("table-buckets")) {
-            tableBucketsMap = getTableBuckets(tableConfig.get("table-buckets"));
-        }
-        Set<String> bucketsTable = new HashSet<>();
+
         Set<String> targetDbSet = new HashSet<>();
         for (SourceSchema schema : schemaList) {
             syncTables.add(schema.getTableName());
@@ -147,16 +148,8 @@ public abstract class DatabaseSync {
             // Calculate the mapping relationship between upstream and downstream tables
             tableMapping.put(
                     schema.getTableIdentifier(), String.format("%s.%s", targetDb, dorisTable));
-            if (!dorisSystem.tableExists(targetDb, dorisTable)) {
-                TableSchema dorisSchema = schema.convertTableSchema(tableConfig);
-                // set doris target database
-                dorisSchema.setDatabase(targetDb);
-                dorisSchema.setTable(dorisTable);
-                if (tableBucketsMap != null) {
-                    setTableSchemaBuckets(tableBucketsMap, dorisSchema, dorisTable, bucketsTable);
-                }
-                dorisSystem.createTable(dorisSchema);
-            }
+            tryCreateTableIfAbsent(dorisSystem, targetDb, dorisTable, schema);
+
             if (!dorisTables.contains(Tuple2.of(targetDb, dorisTable))) {
                 dorisTables.add(Tuple2.of(targetDb, dorisTable));
             }
@@ -165,6 +158,7 @@ public abstract class DatabaseSync {
             System.out.println("Create table finished.");
             System.exit(0);
         }
+        LOG.info("table mapping: {}", tableMapping);
         config.setString(TABLE_NAME_OPTIONS, getSyncTableList(syncTables));
         DataStreamSource<String> streamSource = buildCdcSource(env);
         if (singleSink) {
@@ -339,9 +333,10 @@ public abstract class DatabaseSync {
         return JsonDebeziumSchemaSerializer.builder()
                 .setDorisOptions(dorisBuilder.build())
                 .setNewSchemaChange(newSchemaChange)
+                .setSchemaChangeMode(schemaChangeMode)
                 .setExecutionOptions(executionOptions)
                 .setTableMapping(tableMapping)
-                .setTableProperties(tableConfig)
+                .setDorisTableConf(dorisTableConfig)
                 .setTargetDatabase(database)
                 .setTargetTablePrefix(tablePrefix)
                 .setTargetTableSuffix(tableSuffix)
@@ -413,6 +408,7 @@ public abstract class DatabaseSync {
      * @param tableBuckets the string of tableBuckets, eg:student:10,student_info:20,student.*:30
      * @return The table name and buckets map. The key is table name, the value is buckets.
      */
+    @Deprecated
     public static Map<String, Integer> getTableBuckets(String tableBuckets) {
         Map<String, Integer> tableBucketsMap = new LinkedHashMap<>();
         String[] tableBucketsArray = tableBuckets.split(",");
@@ -433,6 +429,7 @@ public abstract class DatabaseSync {
      * @param dorisTable the table name need to set buckets
      * @param tableHasSet The buckets table is set
      */
+    @Deprecated
     public void setTableSchemaBuckets(
             Map<String, Integer> tableBucketsMap,
             TableSchema dorisSchema,
@@ -460,6 +457,54 @@ public abstract class DatabaseSync {
                 }
             }
         }
+    }
+
+    private void tryCreateTableIfAbsent(
+            DorisSystem dorisSystem, String targetDb, String dorisTable, SourceSchema schema) {
+        if (!dorisSystem.tableExists(targetDb, dorisTable)) {
+            TableSchema dorisSchema =
+                    DorisSchemaFactory.createTableSchema(
+                            database,
+                            dorisTable,
+                            schema.getFields(),
+                            schema.getPrimaryKeys(),
+                            dorisTableConfig,
+                            schema.getTableComment());
+            try {
+                dorisSystem.createTable(dorisSchema);
+            } catch (Exception ex) {
+                handleTableCreationFailure(ex);
+            }
+        }
+    }
+
+    private void handleTableCreationFailure(Exception ex) throws DorisSystemException {
+        if (ignoreIncompatible && ex.getCause() instanceof SQLSyntaxErrorException) {
+            LOG.warn(
+                    "Doris schema and source table schema are not compatible. Error: {} ",
+                    ex.getCause().toString());
+        } else {
+            throw new DorisSystemException("Failed to create table due to: ", ex);
+        }
+    }
+
+    protected Properties getJdbcProperties() {
+        Properties jdbcProps = new Properties();
+        for (Map.Entry<String, String> entry : config.toMap().entrySet()) {
+            String key = entry.getKey();
+            String value = entry.getValue();
+            if (key.startsWith(PROPERTIES_PREFIX)) {
+                jdbcProps.put(key.substring(PROPERTIES_PREFIX.length()), value);
+            }
+        }
+        return jdbcProps;
+    }
+
+    protected String getJdbcUrlTemplate(String initialJdbcUrl, Properties jdbcProperties) {
+        StringBuilder jdbcUrlBuilder = new StringBuilder(initialJdbcUrl);
+        jdbcProperties.forEach(
+                (key, value) -> jdbcUrlBuilder.append("&").append(key).append("=").append(value));
+        return jdbcUrlBuilder.toString();
     }
 
     public DatabaseSync setEnv(StreamExecutionEnvironment env) {
@@ -497,10 +542,16 @@ public abstract class DatabaseSync {
         return this;
     }
 
+    @Deprecated
     public DatabaseSync setTableConfig(Map<String, String> tableConfig) {
         if (!CollectionUtil.isNullOrEmpty(tableConfig)) {
-            this.tableConfig = tableConfig;
+            this.dorisTableConfig = new DorisTableConfig(tableConfig);
         }
+        return this;
+    }
+
+    public DatabaseSync setTableConfig(DorisTableConfig tableConfig) {
+        this.dorisTableConfig = tableConfig;
         return this;
     }
 
@@ -524,8 +575,22 @@ public abstract class DatabaseSync {
         return this;
     }
 
+    public DatabaseSync setSchemaChangeMode(String schemaChangeMode) {
+        if (org.apache.commons.lang3.StringUtils.isEmpty(schemaChangeMode)) {
+            this.schemaChangeMode = SchemaChangeMode.DEBEZIUM_STRUCTURE.getName();
+            return this;
+        }
+        this.schemaChangeMode = schemaChangeMode.trim();
+        return this;
+    }
+
     public DatabaseSync setSingleSink(boolean singleSink) {
         this.singleSink = singleSink;
+        return this;
+    }
+
+    public DatabaseSync setIgnoreIncompatible(boolean ignoreIncompatible) {
+        this.ignoreIncompatible = ignoreIncompatible;
         return this;
     }
 

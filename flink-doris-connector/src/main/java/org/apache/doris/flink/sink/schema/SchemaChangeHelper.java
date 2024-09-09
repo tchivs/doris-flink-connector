@@ -17,11 +17,10 @@
 
 package org.apache.doris.flink.sink.schema;
 
-import org.apache.flink.util.StringUtils;
-
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.compress.utils.Lists;
-import org.apache.doris.flink.catalog.doris.DorisSystem;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.doris.flink.catalog.doris.DorisSchemaFactory;
 import org.apache.doris.flink.catalog.doris.FieldSchema;
 
 import java.util.List;
@@ -115,11 +114,11 @@ public class SchemaChangeHelper {
                 new StringBuilder(
                         String.format(
                                 ADD_DDL,
-                                DorisSystem.quoteTableIdentifier(tableIdentifier),
-                                DorisSystem.identifier(name),
+                                DorisSchemaFactory.quoteTableIdentifier(tableIdentifier),
+                                DorisSchemaFactory.identifier(name),
                                 type));
         if (defaultValue != null) {
-            addDDL.append(" DEFAULT ").append(DorisSystem.quoteDefaultValue(defaultValue));
+            addDDL.append(" DEFAULT ").append(DorisSchemaFactory.quoteDefaultValue(defaultValue));
         }
         commentColumn(addDDL, comment);
         return addDDL.toString();
@@ -128,17 +127,17 @@ public class SchemaChangeHelper {
     public static String buildDropColumnDDL(String tableIdentifier, String columName) {
         return String.format(
                 DROP_DDL,
-                DorisSystem.quoteTableIdentifier(tableIdentifier),
-                DorisSystem.identifier(columName));
+                DorisSchemaFactory.quoteTableIdentifier(tableIdentifier),
+                DorisSchemaFactory.identifier(columName));
     }
 
     public static String buildRenameColumnDDL(
             String tableIdentifier, String oldColumnName, String newColumnName) {
         return String.format(
                 RENAME_DDL,
-                DorisSystem.quoteTableIdentifier(tableIdentifier),
-                DorisSystem.identifier(oldColumnName),
-                DorisSystem.identifier(newColumnName));
+                DorisSchemaFactory.quoteTableIdentifier(tableIdentifier),
+                DorisSchemaFactory.identifier(oldColumnName),
+                DorisSchemaFactory.identifier(newColumnName));
     }
 
     public static String buildColumnExistsQuery(String database, String table, String column) {
@@ -157,9 +156,9 @@ public class SchemaChangeHelper {
             String tableIdentifier, String columnName, String newComment) {
         return String.format(
                 MODIFY_COMMENT_DDL,
-                DorisSystem.quoteTableIdentifier(tableIdentifier),
-                DorisSystem.identifier(columnName),
-                DorisSystem.quoteComment(newComment));
+                DorisSchemaFactory.quoteTableIdentifier(tableIdentifier),
+                DorisSchemaFactory.identifier(columnName),
+                DorisSchemaFactory.quoteComment(newComment));
     }
 
     public static String buildModifyColumnDataTypeDDL(
@@ -171,16 +170,16 @@ public class SchemaChangeHelper {
                 new StringBuilder(
                         String.format(
                                 MODIFY_TYPE_DDL,
-                                DorisSystem.quoteTableIdentifier(tableIdentifier),
-                                DorisSystem.identifier(columnName),
+                                DorisSchemaFactory.quoteTableIdentifier(tableIdentifier),
+                                DorisSchemaFactory.identifier(columnName),
                                 dataType));
         commentColumn(modifyDDL, comment);
         return modifyDDL.toString();
     }
 
     private static void commentColumn(StringBuilder ddl, String comment) {
-        if (!StringUtils.isNullOrWhitespaceOnly(comment)) {
-            ddl.append(" COMMENT '").append(DorisSystem.quoteComment(comment)).append("'");
+        if (StringUtils.isNotEmpty(comment)) {
+            ddl.append(" COMMENT '").append(DorisSchemaFactory.quoteComment(comment)).append("'");
         }
     }
 

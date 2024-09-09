@@ -18,20 +18,19 @@
 package org.apache.doris.flink.catalog.doris;
 
 import org.apache.flink.annotation.Public;
-import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.StringUtils;
 
 import org.apache.commons.compress.utils.Lists;
 import org.apache.doris.flink.cfg.DorisConnectionOptions;
 import org.apache.doris.flink.connection.JdbcConnectionProvider;
 import org.apache.doris.flink.connection.SimpleJdbcConnectionProvider;
-import org.apache.doris.flink.exception.CreateTableException;
 import org.apache.doris.flink.exception.DorisRuntimeException;
 import org.apache.doris.flink.exception.DorisSystemException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
+import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
@@ -41,7 +40,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Predicate;
-import java.util.stream.Collectors;
 
 import static org.apache.flink.util.Preconditions.checkArgument;
 
@@ -50,7 +48,6 @@ import static org.apache.flink.util.Preconditions.checkArgument;
 public class DorisSystem implements Serializable {
     private static final long serialVersionUID = 1L;
     private static final Logger LOG = LoggerFactory.getLogger(DorisSystem.class);
-    private static final String TABLE_BUCKETS = "table-buckets";
     private final JdbcConnectionProvider jdbcConnectionProvider;
     private static final List<String> builtinDatabases =
             Collections.singletonList("information_schema");
@@ -107,10 +104,11 @@ public class DorisSystem implements Serializable {
     }
 
     public void execute(String sql) {
-        try (Statement statement =
-                jdbcConnectionProvider.getOrEstablishConnection().createStatement()) {
+        try (Connection connection = jdbcConnectionProvider.getOrEstablishConnection();
+                Statement statement = connection.createStatement()) {
             statement.execute(sql);
         } catch (Exception e) {
+            LOG.error("SQL query could not be executed: {}", sql, e);
             throw new DorisSystemException(
                     String.format("SQL query could not be executed: %s", sql), e);
         }
@@ -120,18 +118,19 @@ public class DorisSystem implements Serializable {
             String sql, int columnIndex, Predicate<String> filterFunc, Object... params) {
 
         List<String> columnValues = Lists.newArrayList();
-        try (PreparedStatement ps =
-                jdbcConnectionProvider.getOrEstablishConnection().prepareStatement(sql)) {
+        try (Connection connection = jdbcConnectionProvider.getOrEstablishConnection();
+                PreparedStatement ps = connection.prepareStatement(sql)) {
             if (Objects.nonNull(params) && params.length > 0) {
                 for (int i = 0; i < params.length; i++) {
                     ps.setObject(i + 1, params[i]);
                 }
             }
-            ResultSet rs = ps.executeQuery();
-            while (rs.next()) {
-                String columnValue = rs.getString(columnIndex);
-                if (Objects.isNull(filterFunc) || filterFunc.test(columnValue)) {
-                    columnValues.add(columnValue);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String columnValue = rs.getString(columnIndex);
+                    if (filterFunc == null || filterFunc.test(columnValue)) {
+                        columnValues.add(columnValue);
+                    }
                 }
             }
             return columnValues;
@@ -142,87 +141,7 @@ public class DorisSystem implements Serializable {
     }
 
     public static String buildCreateTableDDL(TableSchema schema) {
-        StringBuilder sb = new StringBuilder("CREATE TABLE IF NOT EXISTS ");
-        sb.append(identifier(schema.getDatabase()))
-                .append(".")
-                .append(identifier(schema.getTable()))
-                .append("(");
-
-        Map<String, FieldSchema> fields = schema.getFields();
-        List<String> keys = schema.getKeys();
-        // append keys
-        for (String key : keys) {
-            if (!fields.containsKey(key)) {
-                throw new CreateTableException("key " + key + " not found in column list");
-            }
-            FieldSchema field = fields.get(key);
-            buildColumn(sb, field, true);
-        }
-
-        // append values
-        for (Map.Entry<String, FieldSchema> entry : fields.entrySet()) {
-            if (keys.contains(entry.getKey())) {
-                continue;
-            }
-            FieldSchema field = entry.getValue();
-            buildColumn(sb, field, false);
-        }
-        sb = sb.deleteCharAt(sb.length() - 1);
-        sb.append(" ) ");
-        // append uniq model
-        if (DataModel.UNIQUE.equals(schema.getModel())) {
-            sb.append(schema.getModel().name())
-                    .append(" KEY(")
-                    .append(String.join(",", identifier(schema.getKeys())))
-                    .append(")");
-        }
-
-        // append table comment
-        if (!StringUtils.isNullOrWhitespaceOnly(schema.getTableComment())) {
-            sb.append(" COMMENT '").append(quoteComment(schema.getTableComment())).append("' ");
-        }
-
-        // append distribute key
-        sb.append(" DISTRIBUTED BY HASH(")
-                .append(String.join(",", identifier(schema.getDistributeKeys())))
-                .append(")");
-
-        Map<String, String> properties = schema.getProperties();
-        if (schema.getTableBuckets() != null) {
-
-            int bucketsNum = schema.getTableBuckets();
-            if (bucketsNum <= 0) {
-                throw new CreateTableException("The number of buckets must be positive.");
-            }
-            sb.append(" BUCKETS ").append(bucketsNum);
-        } else {
-            sb.append(" BUCKETS AUTO ");
-        }
-        // append properties
-        int index = 0;
-        int skipProNum = 0;
-        for (Map.Entry<String, String> entry : properties.entrySet()) {
-            // skip table-buckets
-            if (entry.getKey().equals(TABLE_BUCKETS)) {
-                skipProNum++;
-                continue;
-            }
-            if (index == 0) {
-                sb.append(" PROPERTIES (");
-            }
-            if (index > 0) {
-                sb.append(",");
-            }
-            sb.append(quoteProperties(entry.getKey()))
-                    .append("=")
-                    .append(quoteProperties(entry.getValue()));
-            index++;
-
-            if (index == (schema.getProperties().size() - skipProNum)) {
-                sb.append(")");
-            }
-        }
-        return sb.toString();
+        return DorisSchemaFactory.generateCreateTableDDL(schema);
     }
 
     public Map<String, String> getTableFieldNames(String databaseName, String tableName) {
@@ -236,66 +155,39 @@ public class DorisSystem implements Serializable {
                         databaseName, tableName);
 
         Map<String, String> columnValues = new HashMap<>();
-        try (PreparedStatement ps =
-                jdbcConnectionProvider.getOrEstablishConnection().prepareStatement(sql)) {
-            ResultSet rs = ps.executeQuery();
+        try (Connection connection = jdbcConnectionProvider.getOrEstablishConnection();
+                PreparedStatement ps = connection.prepareStatement(sql);
+                ResultSet rs = ps.executeQuery()) {
             while (rs.next()) {
-                String filedName = rs.getString(1);
+                String fieldName = rs.getString(1);
                 String datatype = rs.getString(2);
-                columnValues.put(filedName, datatype);
+                columnValues.put(fieldName, datatype);
             }
             return columnValues;
         } catch (Exception e) {
+            LOG.error("SQL query could not be executed: {}", sql, e);
             throw new DorisSystemException(
                     String.format("The following SQL query could not be executed: %s", sql), e);
         }
     }
 
-    private static void buildColumn(StringBuilder sql, FieldSchema field, boolean isKey) {
-        String fieldType = field.getTypeString();
-        if (isKey && DorisType.STRING.equals(fieldType)) {
-            fieldType = String.format("%s(%s)", DorisType.VARCHAR, 65533);
-        }
-        sql.append(identifier(field.getName())).append(" ").append(fieldType);
-
-        if (field.getDefaultValue() != null) {
-            sql.append(" DEFAULT " + quoteDefaultValue(field.getDefaultValue()));
-        }
-        sql.append(" COMMENT '").append(quoteComment(field.getComment())).append("',");
-    }
-
+    @Deprecated
     public static String quoteDefaultValue(String defaultValue) {
-        // DEFAULT current_timestamp not need quote
-        if (defaultValue.equalsIgnoreCase("current_timestamp")) {
-            return defaultValue;
-        }
-        return "'" + defaultValue + "'";
+        return DorisSchemaFactory.quoteDefaultValue(defaultValue);
     }
 
+    @Deprecated
     public static String quoteComment(String comment) {
-        if (comment == null) {
-            return "";
-        } else {
-            return comment.replaceAll("'", "\\\\'");
-        }
+        return DorisSchemaFactory.quoteComment(comment);
     }
 
-    private static List<String> identifier(List<String> name) {
-        List<String> result = name.stream().map(m -> identifier(m)).collect(Collectors.toList());
-        return result;
-    }
-
+    @Deprecated
     public static String identifier(String name) {
-        return "`" + name + "`";
+        return DorisSchemaFactory.identifier(name);
     }
 
+    @Deprecated
     public static String quoteTableIdentifier(String tableIdentifier) {
-        String[] dbTable = tableIdentifier.split("\\.");
-        Preconditions.checkArgument(dbTable.length == 2);
-        return identifier(dbTable[0]) + "." + identifier(dbTable[1]);
-    }
-
-    private static String quoteProperties(String name) {
-        return "'" + name + "'";
+        return DorisSchemaFactory.quoteTableIdentifier(tableIdentifier);
     }
 }

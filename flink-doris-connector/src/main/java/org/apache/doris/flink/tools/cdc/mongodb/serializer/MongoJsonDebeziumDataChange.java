@@ -61,6 +61,7 @@ public class MongoJsonDebeziumDataChange extends CdcDataChange implements Change
     public JsonDebeziumChangeContext changeContext;
     public ObjectMapper objectMapper;
     public Map<String, String> tableMapping;
+    private final boolean enableDelete;
 
     public MongoJsonDebeziumDataChange(JsonDebeziumChangeContext changeContext) {
         this.changeContext = changeContext;
@@ -68,6 +69,7 @@ public class MongoJsonDebeziumDataChange extends CdcDataChange implements Change
         this.objectMapper = changeContext.getObjectMapper();
         this.lineDelimiter = changeContext.getLineDelimiter();
         this.tableMapping = changeContext.getTableMapping();
+        this.enableDelete = changeContext.enableDelete();
     }
 
     @Override
@@ -93,7 +95,7 @@ public class MongoJsonDebeziumDataChange extends CdcDataChange implements Change
                 break;
             case OP_DELETE:
                 valueMap = extractDeleteRow(recordRoot);
-                addDeleteSign(valueMap, true);
+                addDeleteSign(valueMap, enableDelete);
                 break;
             default:
                 LOG.error("parse record fail, unknown op {} in {}", op, record);
@@ -126,7 +128,13 @@ public class MongoJsonDebeziumDataChange extends CdcDataChange implements Change
     public Map<String, Object> extractAfterRow(JsonNode recordRoot) {
         JsonNode dataNode = recordRoot.get(FIELD_DATA);
         Map<String, Object> rowMap = extractRow(dataNode);
-        String objectId = ((Map<?, ?>) rowMap.get(ID_FIELD)).get(OID_FIELD).toString();
+        String objectId;
+        // if user specifies the `_id` field manually, the $oid field may not exist
+        if (rowMap.get(ID_FIELD) instanceof Map<?, ?>) {
+            objectId = ((Map<?, ?>) rowMap.get(ID_FIELD)).get(OID_FIELD).toString();
+        } else {
+            objectId = rowMap.get(ID_FIELD).toString();
+        }
         rowMap.put(ID_FIELD, objectId);
         return rowMap;
     }
@@ -135,7 +143,13 @@ public class MongoJsonDebeziumDataChange extends CdcDataChange implements Change
             throws JsonProcessingException {
         String documentKey = extractJsonNode(recordRoot, FIELD_DOCUMENT_KEY);
         JsonNode jsonNode = objectMapper.readTree(documentKey);
-        String objectId = extractJsonNode(jsonNode.get(ID_FIELD), OID_FIELD);
+        String objectId;
+        // if user specifies the `_id` field manually, the $oid field may not exist
+        if (jsonNode.get(ID_FIELD).has(OID_FIELD)) {
+            objectId = extractJsonNode(jsonNode.get(ID_FIELD), OID_FIELD);
+        } else {
+            objectId = jsonNode.get(ID_FIELD).asText();
+        }
         Map<String, Object> row = new HashMap<>();
         row.put(ID_FIELD, objectId);
         return row;

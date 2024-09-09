@@ -43,6 +43,7 @@ import org.apache.doris.flink.cfg.DorisExecutionOptions;
 import org.apache.doris.flink.cfg.DorisOptions;
 import org.apache.doris.flink.sink.writer.serializer.DorisRecordSerializer;
 import org.apache.doris.flink.tools.cdc.DatabaseSync;
+import org.apache.doris.flink.tools.cdc.DatabaseSyncConfig;
 import org.apache.doris.flink.tools.cdc.ParsingProcessFunction;
 import org.apache.doris.flink.tools.cdc.SourceSchema;
 import org.apache.doris.flink.tools.cdc.mongodb.serializer.MongoDBJsonDebeziumSchemaSerializer;
@@ -61,10 +62,6 @@ import static org.apache.flink.cdc.connectors.mongodb.internal.MongoDBEnvelope.e
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
 public class MongoDBDatabaseSync extends DatabaseSync {
-
-    private static final String INITIAL_MODE = "initial";
-    private static final String LATEST_OFFSET_MODE = "latest-offset";
-    private static final String TIMESTAMP_MODE = "timestamp";
     public static final ConfigOption<Double> MONGO_CDC_CREATE_SAMPLE_PERCENT =
             ConfigOptions.key("schema.sample-percent")
                     .doubleType()
@@ -133,7 +130,8 @@ public class MongoDBDatabaseSync extends DatabaseSync {
     private ArrayList<Document> sampleData(MongoCollection<Document> collection, Long sampleNum) {
         ArrayList<Document> query = new ArrayList<>();
         query.add(new Document("$sample", new Document("size", sampleNum)));
-        return collection.aggregate(query).into(new ArrayList<>());
+        // allowDiskUse to avoid mongo 'Sort exceeded memory limit' error
+        return collection.aggregate(query).allowDiskUse(true).into(new ArrayList<>());
     }
 
     private static String buildConnectionString(
@@ -159,6 +157,8 @@ public class MongoDBDatabaseSync extends DatabaseSync {
         String username = config.get(MongoDBSourceOptions.USERNAME);
         String password = config.get(MongoDBSourceOptions.PASSWORD);
         String database = config.get(MongoDBSourceOptions.DATABASE);
+        // note: just to unify job name, no other use.
+        config.setString(DatabaseSyncConfig.DATABASE_NAME, database);
         String collection = config.get(MongoDBSourceOptions.COLLECTION);
         if (StringUtils.isBlank(collection)) {
             collection = config.get(TABLE_NAME);
@@ -178,13 +178,13 @@ public class MongoDBDatabaseSync extends DatabaseSync {
 
         String startupMode = config.get(SourceOptions.SCAN_STARTUP_MODE);
         switch (startupMode.toLowerCase()) {
-            case INITIAL_MODE:
+            case DatabaseSyncConfig.SCAN_STARTUP_MODE_VALUE_INITIAL:
                 mongoDBSourceBuilder.startupOptions(StartupOptions.initial());
                 break;
-            case LATEST_OFFSET_MODE:
+            case DatabaseSyncConfig.SCAN_STARTUP_MODE_VALUE_LATEST_OFFSET:
                 mongoDBSourceBuilder.startupOptions(StartupOptions.latest());
                 break;
-            case TIMESTAMP_MODE:
+            case DatabaseSyncConfig.SCAN_STARTUP_MODE_VALUE_TIMESTAMP:
                 mongoDBSourceBuilder.startupOptions(
                         StartupOptions.timestamp(
                                 config.get(SourceOptions.SCAN_STARTUP_TIMESTAMP_MILLIS)));
@@ -208,7 +208,7 @@ public class MongoDBDatabaseSync extends DatabaseSync {
                 .setDorisOptions(dorisBuilder.build())
                 .setExecutionOptions(executionOptions)
                 .setTableMapping(tableMapping)
-                .setTableProperties(tableConfig)
+                .setTableConf(dorisTableConfig)
                 .setTargetDatabase(database)
                 .build();
     }

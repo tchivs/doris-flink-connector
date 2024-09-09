@@ -45,6 +45,7 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static org.apache.doris.flink.cfg.ConfigurationOptions.DORIS_BATCH_SIZE_DEFAULT;
+import static org.apache.doris.flink.cfg.ConfigurationOptions.DORIS_BATCH_SIZE_MAX;
 import static org.apache.doris.flink.cfg.ConfigurationOptions.DORIS_DEFAULT_CLUSTER;
 import static org.apache.doris.flink.cfg.ConfigurationOptions.DORIS_DESERIALIZE_ARROW_ASYNC_DEFAULT;
 import static org.apache.doris.flink.cfg.ConfigurationOptions.DORIS_DESERIALIZE_QUEUE_SIZE_DEFAULT;
@@ -52,7 +53,7 @@ import static org.apache.doris.flink.cfg.ConfigurationOptions.DORIS_EXEC_MEM_LIM
 import static org.apache.doris.flink.cfg.ConfigurationOptions.DORIS_REQUEST_QUERY_TIMEOUT_S_DEFAULT;
 import static org.apache.doris.flink.util.ErrorMessages.SHOULD_NOT_HAPPEN_MESSAGE;
 
-public class DorisValueReader implements AutoCloseable {
+public class DorisValueReader extends ValueReader implements AutoCloseable {
     private static final Logger LOG = LoggerFactory.getLogger(DorisValueReader.class);
     protected BackendClient client;
     protected Lock clientLock = new ReentrantLock();
@@ -130,7 +131,7 @@ public class DorisValueReader implements AutoCloseable {
         Integer batchSize =
                 readOptions.getRequestBatchSize() == null
                         ? DORIS_BATCH_SIZE_DEFAULT
-                        : readOptions.getRequestBatchSize();
+                        : Math.min(readOptions.getRequestBatchSize(), DORIS_BATCH_SIZE_MAX);
         Integer queryDorisTimeout =
                 readOptions.getRequestQueryTimeoutS() == null
                         ? DORIS_REQUEST_QUERY_TIMEOUT_S_DEFAULT

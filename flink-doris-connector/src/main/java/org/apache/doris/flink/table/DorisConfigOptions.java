@@ -280,14 +280,14 @@ public class DorisConfigOptions {
     public static final ConfigOption<Integer> SINK_BUFFER_FLUSH_MAX_ROWS =
             ConfigOptions.key("sink.buffer-flush.max-rows")
                     .intType()
-                    .defaultValue(50000)
+                    .defaultValue(500000)
                     .withDescription(
                             "The maximum number of flush items in each batch, the default is 5w");
 
     public static final ConfigOption<MemorySize> SINK_BUFFER_FLUSH_MAX_BYTES =
             ConfigOptions.key("sink.buffer-flush.max-bytes")
                     .memoryType()
-                    .defaultValue(MemorySize.parse("10mb"))
+                    .defaultValue(MemorySize.parse("100mb"))
                     .withDescription(
                             "The maximum number of bytes flushed in each batch, the default is 10MB");
 
@@ -312,7 +312,16 @@ public class DorisConfigOptions {
                     .booleanType()
                     .defaultValue(false)
                     .withDescription("Whether to use buffer cache for breakpoint resume");
-
+    public static final ConfigOption<Boolean> USE_FLIGHT_SQL =
+            ConfigOptions.key("source.use-flight-sql")
+                    .booleanType()
+                    .defaultValue(Boolean.FALSE)
+                    .withDescription("use flight sql flag");
+    public static final ConfigOption<Integer> FLIGHT_SQL_PORT =
+            ConfigOptions.key("source.flight-sql-port")
+                    .intType()
+                    .defaultValue(9040)
+                    .withDescription("flight sql port");
     // Prefix for Doris StreamLoad specific properties.
     public static final String STREAM_LOAD_PROP_PREFIX = "sink.properties.";
 

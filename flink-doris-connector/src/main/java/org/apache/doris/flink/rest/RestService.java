@@ -234,6 +234,38 @@ public class RestService implements Serializable {
         }
     }
 
+    @VisibleForTesting
+    public static String parseFlightSql(
+            DorisReadOptions readOptions,
+            DorisOptions options,
+            PartitionDefinition partition,
+            Logger logger)
+            throws IllegalArgumentException {
+        String[] tableIdentifiers = parseIdentifier(options.getTableIdentifier(), logger);
+        String readFields =
+                StringUtils.isBlank(readOptions.getReadFields())
+                        ? "*"
+                        : readOptions.getReadFields();
+        String sql =
+                "select "
+                        + readFields
+                        + " from `"
+                        + tableIdentifiers[0]
+                        + "`.`"
+                        + tableIdentifiers[1]
+                        + "`";
+        String tablet =
+                partition.getTabletIds().stream()
+                        .map(Object::toString)
+                        .collect(Collectors.joining(","));
+        sql += "  TABLET(" + tablet + ") ";
+        if (!StringUtils.isEmpty(readOptions.getFilterQuery())) {
+            sql += " where " + readOptions.getFilterQuery();
+        }
+        logger.info("Query SQL Sending to Doris FE is: '{}'.", sql);
+        return sql;
+    }
+
     /**
      * parse table identifier to array.
      *
@@ -277,8 +309,9 @@ public class RestService implements Serializable {
         List<String> nodes = Arrays.asList(feNodes.split(","));
         Collections.shuffle(nodes);
         for (String feNode : nodes) {
-            if (BackendUtil.tryHttpConnection(feNode)) {
-                return feNode;
+            String host = feNode.trim();
+            if (BackendUtil.tryHttpConnection(host)) {
+                return host;
             }
         }
         throw new DorisRuntimeException(
@@ -548,7 +581,7 @@ public class RestService implements Serializable {
         String queryPlanUri =
                 String.format(
                         QUERY_PLAN_API,
-                        options.getFenodes(),
+                        randomEndpoint(options.getFenodes(), logger),
                         tableIdentifier[0],
                         tableIdentifier[1]);
         HttpPost httpPost = new HttpPost(queryPlanUri);

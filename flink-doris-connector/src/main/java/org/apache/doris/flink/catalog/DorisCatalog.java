@@ -50,12 +50,13 @@ import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.StringUtils;
 
 import org.apache.commons.compress.utils.Lists;
-import org.apache.doris.flink.catalog.doris.DataModel;
+import org.apache.doris.flink.catalog.doris.DorisSchemaFactory;
 import org.apache.doris.flink.catalog.doris.DorisSystem;
 import org.apache.doris.flink.catalog.doris.FieldSchema;
 import org.apache.doris.flink.catalog.doris.TableSchema;
 import org.apache.doris.flink.cfg.DorisConnectionOptions;
 import org.apache.doris.flink.table.DorisDynamicTableFactory;
+import org.apache.doris.flink.tools.cdc.DorisTableConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -202,7 +203,7 @@ public class DorisCatalog extends AbstractCatalog {
     @Override
     public List<String> listViews(String databaseName)
             throws DatabaseNotExistException, CatalogException {
-        throw new UnsupportedOperationException();
+        return Collections.emptyList();
     }
 
     @Override
@@ -353,15 +354,14 @@ public class DorisCatalog extends AbstractCatalog {
         }
 
         List<String> primaryKeys = getCreateDorisKeys(table.getSchema());
-        TableSchema schema = new TableSchema();
-        schema.setDatabase(tablePath.getDatabaseName());
-        schema.setTable(tablePath.getObjectName());
-        schema.setTableComment(table.getComment());
-        schema.setFields(getCreateDorisColumns(table.getSchema()));
-        schema.setKeys(primaryKeys);
-        schema.setModel(DataModel.UNIQUE);
-        schema.setDistributeKeys(primaryKeys);
-        schema.setProperties(getCreateTableProps(options));
+        TableSchema schema =
+                DorisSchemaFactory.createTableSchema(
+                        tablePath.getDatabaseName(),
+                        tablePath.getObjectName(),
+                        getCreateDorisColumns(table.getSchema()),
+                        primaryKeys,
+                        new DorisTableConfig(getCreateTableProps(options)),
+                        table.getComment());
 
         dorisSystem.createTable(schema);
     }
@@ -425,7 +425,7 @@ public class DorisCatalog extends AbstractCatalog {
     @Override
     public boolean partitionExists(ObjectPath tablePath, CatalogPartitionSpec partitionSpec)
             throws CatalogException {
-        throw new UnsupportedOperationException();
+        return false;
     }
 
     @Override

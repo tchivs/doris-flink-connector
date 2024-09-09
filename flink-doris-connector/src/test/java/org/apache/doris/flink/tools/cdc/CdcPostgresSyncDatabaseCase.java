@@ -17,9 +17,11 @@
 
 package org.apache.doris.flink.tools.cdc;
 
+import org.apache.flink.cdc.connectors.postgres.source.config.PostgresSourceOptions;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 
+import org.apache.doris.flink.table.DorisConfigOptions;
 import org.apache.doris.flink.tools.cdc.postgres.PostgresDatabaseSync;
 
 import java.util.HashMap;
@@ -35,26 +37,20 @@ public class CdcPostgresSyncDatabaseCase {
         env.disableOperatorChaining();
         env.enableCheckpointing(10000);
 
-        // Map<String,String> flinkMap = new HashMap<>();
-        // flinkMap.put("execution.checkpointing.interval","10s");
-        // flinkMap.put("pipeline.operator-chaining","false");
-        // flinkMap.put("parallelism.default","1");
-
-        // Configuration configuration = Configuration.fromMap(flinkMap);
-        // env.configure(configuration);
-
         String database = "db2";
         String tablePrefix = "";
         String tableSuffix = "";
         Map<String, String> sourceConfig = new HashMap<>();
-        sourceConfig.put("database-name", "postgres");
-        sourceConfig.put("schema-name", "public");
-        sourceConfig.put("slot.name", "test");
-        sourceConfig.put("decoding.plugin.name", "pgoutput");
-        sourceConfig.put("hostname", "127.0.0.1");
-        sourceConfig.put("port", "5432");
-        sourceConfig.put("username", "postgres");
-        sourceConfig.put("password", "123456");
+        sourceConfig.put(PostgresSourceOptions.DATABASE_NAME.key(), "postgres");
+        sourceConfig.put(PostgresSourceOptions.SCHEMA_NAME.key(), "public");
+        sourceConfig.put(PostgresSourceOptions.SLOT_NAME.key(), "test");
+        sourceConfig.put(PostgresSourceOptions.DECODING_PLUGIN_NAME.key(), "pgoutput");
+        sourceConfig.put(PostgresSourceOptions.HOSTNAME.key(), "127.0.0.1");
+        sourceConfig.put(PostgresSourceOptions.PG_PORT.key(), "5432");
+        sourceConfig.put(PostgresSourceOptions.USERNAME.key(), "postgres");
+        sourceConfig.put(PostgresSourceOptions.PASSWORD.key(), "123456");
+        // add jdbc properties configuration
+        sourceConfig.put("jdbc.properties.ssl", "false");
         // sourceConfig.put("debezium.database.tablename.case.insensitive","false");
         // sourceConfig.put("scan.incremental.snapshot.enabled","true");
         // sourceConfig.put("debezium.include.schema.changes","false");
@@ -62,23 +58,23 @@ public class CdcPostgresSyncDatabaseCase {
         Configuration config = Configuration.fromMap(sourceConfig);
 
         Map<String, String> sinkConfig = new HashMap<>();
-        sinkConfig.put("fenodes", "10.20.30.1:8030");
-        // sinkConfig.put("benodes","10.20.30.1:8040, 10.20.30.2:8040, 10.20.30.3:8040");
-        sinkConfig.put("username", "root");
-        sinkConfig.put("password", "");
-        sinkConfig.put("jdbc-url", "jdbc:mysql://10.20.30.1:9030");
-        sinkConfig.put("sink.label-prefix", UUID.randomUUID().toString());
+        sinkConfig.put(DorisConfigOptions.FENODES.key(), "10.20.30.1:8030");
+        sinkConfig.put(DorisConfigOptions.USERNAME.key(), "root");
+        sinkConfig.put(DorisConfigOptions.PASSWORD.key(), "");
+        sinkConfig.put(DorisConfigOptions.JDBC_URL.key(), "jdbc:mysql://10.20.30.1:9030");
+        sinkConfig.put(DorisConfigOptions.SINK_LABEL_PREFIX.key(), UUID.randomUUID().toString());
         Configuration sinkConf = Configuration.fromMap(sinkConfig);
 
         Map<String, String> tableConfig = new HashMap<>();
-        tableConfig.put("replication_num", "1");
-        tableConfig.put("table-buckets", "tbl1:10,tbl2:20,a.*:30,b.*:40,.*:50");
+        tableConfig.put(DatabaseSyncConfig.REPLICATION_NUM, "1");
+        tableConfig.put(DatabaseSyncConfig.TABLE_BUCKETS, "tbl1:10,tbl2:20,a.*:30,b.*:40,.*:50");
         String includingTables = "a_.*|b_.*|c";
         String excludingTables = "";
         String multiToOneOrigin = "a_.*|b_.*";
         String multiToOneTarget = "a|b";
         boolean ignoreDefaultValue = false;
-        boolean useNewSchemaChange = false;
+        boolean useNewSchemaChange = true;
+        boolean ignoreIncompatible = false;
         DatabaseSync databaseSync = new PostgresDatabaseSync();
         databaseSync
                 .setEnv(env)
@@ -95,6 +91,7 @@ public class CdcPostgresSyncDatabaseCase {
                 .setTableConfig(tableConfig)
                 .setCreateTableOnly(false)
                 .setNewSchemaChange(useNewSchemaChange)
+                .setIgnoreIncompatible(ignoreIncompatible)
                 .create();
         databaseSync.build();
         env.execute(String.format("Postgres-Doris Database Sync: %s", database));
