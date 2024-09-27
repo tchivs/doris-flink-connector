@@ -24,11 +24,10 @@ import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 
-import org.apache.doris.flink.container.AbstractE2EService;
+import org.apache.doris.flink.container.AbstractContainerTestBase;
 import org.apache.doris.flink.container.ContainerUtils;
-import org.junit.After;
+import org.apache.doris.flink.table.DorisConfigOptions;
 import org.junit.Assert;
-import org.junit.Before;
 import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,25 +36,18 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
-public class Doris2DorisE2ECase extends AbstractE2EService {
+public class Doris2DorisE2ECase extends AbstractContainerTestBase {
     private static final Logger LOG = LoggerFactory.getLogger(Doris2DorisE2ECase.class);
     private static final String DATABASE_SOURCE = "test_doris2doris_source";
     private static final String DATABASE_SINK = "test_doris2doris_sink";
     private static final String TABLE = "test_tbl";
-
-    @Before
-    public void setUp() throws InterruptedException {
-        LOG.info("Doris2DorisE2ECase attempting to acquire semaphore.");
-        SEMAPHORE.acquire();
-        LOG.info("Doris2DorisE2ECase semaphore acquired.");
-    }
 
     @Test
     public void testDoris2Doris() throws Exception {
         LOG.info("Start executing the test case of doris to doris.");
         initializeDorisTable();
         final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-        env.setParallelism(1);
+        env.setParallelism(2);
         env.setRuntimeMode(RuntimeExecutionMode.BATCH);
         final StreamTableEnvironment tEnv = StreamTableEnvironment.create(env);
 
@@ -81,7 +73,9 @@ public class Doris2DorisE2ECase extends AbstractE2EService {
                                 + "c16  ROW<name String, age int>, \n"
                                 + "c17  STRING \n"
                                 + ") WITH ("
-                                + " 'connector' = 'doris',"
+                                + " 'connector' = '"
+                                + DorisConfigOptions.IDENTIFIER
+                                + "',"
                                 + " 'fenodes' = '%s',"
                                 + " 'table.identifier' = '%s',"
                                 + " 'sink.label-prefix' = '"
@@ -118,7 +112,9 @@ public class Doris2DorisE2ECase extends AbstractE2EService {
                                 + "c16  ROW<name String, age int>, \n"
                                 + "c17  STRING \n"
                                 + ") WITH ("
-                                + " 'connector' = 'doris',"
+                                + " 'connector' = '"
+                                + DorisConfigOptions.IDENTIFIER
+                                + "',"
                                 + " 'fenodes' = '%s',"
                                 + " 'sink.label-prefix' = '"
                                 + UUID.randomUUID()
@@ -162,15 +158,5 @@ public class Doris2DorisE2ECase extends AbstractE2EService {
                         "container/e2e/doris2doris/test_doris2doris_sink_test_tbl.sql");
         ContainerUtils.executeSQLStatement(getDorisQueryConnection(), LOG, sinkInitSql);
         LOG.info("Initialization of doris table successful.");
-    }
-
-    @After
-    public void close() {
-        try {
-            // Ensure that semaphore is always released
-        } finally {
-            LOG.info("Doris2DorisE2ECase releasing semaphore.");
-            SEMAPHORE.release();
-        }
     }
 }

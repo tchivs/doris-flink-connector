@@ -42,6 +42,7 @@ import org.apache.flink.util.CollectionUtil;
 import com.google.common.collect.Lists;
 import org.apache.doris.flink.cfg.DorisConnectionOptions;
 import org.apache.doris.flink.container.AbstractITCaseService;
+import org.apache.doris.flink.table.DorisConfigOptions;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Ignore;
@@ -146,7 +147,7 @@ public class DorisCatalogITCase extends AbstractITCaseService {
         props.put("sink.enable-2pc", "false");
         catalog = new DorisCatalog(TEST_CATALOG_NAME, connectionOptions, TEST_DB, props);
         this.tEnv = TableEnvironment.create(EnvironmentSettings.inStreamingMode());
-        tEnv.getConfig().set(TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        tEnv.getConfig().set(TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, DEFAULT_PARALLELISM);
         // Use doris catalog.
         tEnv.registerCatalog(TEST_CATALOG_NAME, catalog);
         tEnv.useCatalog(TEST_CATALOG_NAME);
@@ -402,7 +403,7 @@ public class DorisCatalogITCase extends AbstractITCaseService {
                 TABLE_SCHEMA,
                 new HashMap<String, String>() {
                     {
-                        put("connector", "doris");
+                        put("connector", DorisConfigOptions.IDENTIFIER);
                         put("table.properties.replication_num", "1");
                     }
                 },

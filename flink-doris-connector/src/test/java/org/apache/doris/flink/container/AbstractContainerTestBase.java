@@ -19,16 +19,24 @@ package org.apache.doris.flink.container;
 
 import org.apache.doris.flink.container.instance.ContainerService;
 import org.apache.doris.flink.container.instance.DorisContainer;
+import org.apache.doris.flink.container.instance.DorisCustomerContainer;
 import org.junit.BeforeClass;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.sql.Connection;
+import java.util.List;
 import java.util.Objects;
+import java.util.stream.Collectors;
+
+import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 public abstract class AbstractContainerTestBase {
     private static final Logger LOG = LoggerFactory.getLogger(AbstractContainerTestBase.class);
     private static ContainerService dorisContainerService;
+    public static final int DEFAULT_PARALLELISM = 2;
 
     @BeforeClass
     public static void initContainers() {
@@ -41,7 +49,8 @@ public abstract class AbstractContainerTestBase {
             LOG.info("The doris container has been started and is running status.");
             return;
         }
-        dorisContainerService = new DorisContainer();
+        Boolean customerEnv = Boolean.valueOf(System.getProperty("customer_env", "false"));
+        dorisContainerService = customerEnv ? new DorisCustomerContainer() : new DorisContainer();
         dorisContainerService.startContainer();
         LOG.info("Doris container was started.");
     }
@@ -67,9 +76,7 @@ public abstract class AbstractContainerTestBase {
     }
 
     protected String getDorisQueryUrl() {
-        return String.format(
-                "jdbc:mysql://%s:%s",
-                getDorisInstanceHost(), dorisContainerService.getMappedPort(9030));
+        return dorisContainerService.getJdbcUrl();
     }
 
     protected String getDorisInstanceHost() {
@@ -87,5 +94,21 @@ public abstract class AbstractContainerTestBase {
         }
         dorisContainerService.close();
         LOG.info("Doris container was closed.");
+    }
+
+    // ------------------------------------------------------------------------
+    //  test utilities
+    // ------------------------------------------------------------------------
+    public static void assertEqualsInAnyOrder(List<Object> expected, List<Object> actual) {
+        assertTrue(expected != null && actual != null);
+        assertEqualsInOrder(
+                expected.stream().sorted().collect(Collectors.toList()),
+                actual.stream().sorted().collect(Collectors.toList()));
+    }
+
+    public static void assertEqualsInOrder(List<Object> expected, List<Object> actual) {
+        assertTrue(expected != null && actual != null);
+        assertEquals(expected.size(), actual.size());
+        assertArrayEquals(expected.toArray(new Object[0]), actual.toArray(new Object[0]));
     }
 }
